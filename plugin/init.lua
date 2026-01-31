@@ -6,7 +6,7 @@ local M = {}
 -- Internal state
 local session_dir = nil
 local auto_save_interval = 15 * 60
-local last_save_time = 0
+local last_save_time = os.time()
 local restoring = false
 
 --- Default options
