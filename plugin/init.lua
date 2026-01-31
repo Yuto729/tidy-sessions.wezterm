@@ -351,27 +351,35 @@ function M.apply_to_config(config, opts)
   -- Register workspace selector on gui-attached
   if opts.show_selector_on_attach then
     wezterm.on('gui-attached', function(domain)
-      local workspace = wezterm.mux.get_active_workspace()
-      for _, window in ipairs(wezterm.mux.all_windows()) do
-        if window:get_workspace() == workspace then
-          local gui_window = window:gui_window()
-          if gui_window then
-            local tab = window:active_tab()
-            if tab then
-              local pane = tab:active_pane()
-              if pane then
-                gui_window:perform_action(
-                  wezterm.action_callback(function(win, p)
-                    M.show_workspace_selector(win, p)
-                  end),
-                  pane
-                )
+      wezterm.log_info('session-manager: gui-attached fired, domain=' .. tostring(domain))
+      wezterm.time.call_after(1, function()
+        wezterm.log_info('session-manager: call_after triggered')
+        local workspace = wezterm.mux.get_active_workspace()
+        local all_windows = wezterm.mux.all_windows()
+        wezterm.log_info('session-manager: workspace=' .. workspace .. ' windows=' .. #all_windows)
+        for _, window in ipairs(all_windows) do
+          if window:get_workspace() == workspace then
+            local gui_window = window:gui_window()
+            wezterm.log_info('session-manager: gui_window=' .. tostring(gui_window))
+            if gui_window then
+              local tab = window:active_tab()
+              if tab then
+                local pane = tab:active_pane()
+                if pane then
+                  wezterm.log_info('session-manager: showing selector')
+                  gui_window:perform_action(
+                    wezterm.action_callback(function(win, p)
+                      M.show_workspace_selector(win, p)
+                    end),
+                    pane
+                  )
+                end
               end
             end
+            break
           end
-          break
         end
-      end
+      end)
     end)
   end
 end
