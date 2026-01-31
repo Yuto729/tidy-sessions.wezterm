@@ -348,33 +348,18 @@ function M.apply_to_config(config, opts)
     end)
   end
 
-  -- Register workspace selector on startup
+  -- Show workspace selector on first update-status event
   if opts.show_selector_on_attach then
-    wezterm.on('gui-startup', function(cmd)
-      wezterm.log_info('session-manager: gui-startup fired')
-      wezterm.time.call_after(1, function()
-        local workspace = wezterm.mux.get_active_workspace()
-        for _, window in ipairs(wezterm.mux.all_windows()) do
-          if window:get_workspace() == workspace then
-            local gui_window = window:gui_window()
-            wezterm.log_info('session-manager: gui_window=' .. tostring(gui_window))
-            if gui_window then
-              local tab = window:active_tab()
-              if tab then
-                local pane = tab:active_pane()
-                if pane then
-                  wezterm.log_info('session-manager: showing selector')
-                  gui_window:perform_action(
-                    wezterm.action_callback(function(win, p)
-                      M.show_workspace_selector(win, p)
-                    end),
-                    pane
-                  )
-                end
-              end
-            end
-            break
-          end
+    local selector_shown = false
+    wezterm.on('update-status', function(window, pane)
+      if selector_shown then return end
+      selector_shown = true
+      wezterm.time.call_after(0.5, function()
+        local ok = pcall(function()
+          M.show_workspace_selector(window, pane)
+        end)
+        if not ok then
+          wezterm.log_info('session-manager: failed to show selector on attach')
         end
       end)
     end)
