@@ -348,16 +348,13 @@ function M.apply_to_config(config, opts)
     end)
   end
 
-  -- Register workspace selector on gui-attached
+  -- Register workspace selector on startup
   if opts.show_selector_on_attach then
-    wezterm.on('gui-attached', function(domain)
-      wezterm.log_info('session-manager: gui-attached fired, domain=' .. tostring(domain))
+    wezterm.on('gui-startup', function(cmd)
+      wezterm.log_info('session-manager: gui-startup fired')
       wezterm.time.call_after(1, function()
-        wezterm.log_info('session-manager: call_after triggered')
         local workspace = wezterm.mux.get_active_workspace()
-        local all_windows = wezterm.mux.all_windows()
-        wezterm.log_info('session-manager: workspace=' .. workspace .. ' windows=' .. #all_windows)
-        for _, window in ipairs(all_windows) do
+        for _, window in ipairs(wezterm.mux.all_windows()) do
           if window:get_workspace() == workspace then
             local gui_window = window:gui_window()
             wezterm.log_info('session-manager: gui_window=' .. tostring(gui_window))
