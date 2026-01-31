@@ -195,8 +195,8 @@ function M.restore_state(window)
       -- Restart nvim in panes that were running it
       if pane_data.tty and pane_data.tty:match('/nvim$') then
         local panes = new_tab:panes()
-        local target_pane = panes[#panes]
-        if target_pane and j > 1 then
+        local target_pane = panes[j] or panes[#panes]
+        if target_pane then
           target_pane:send_text('nvim .\n')
         end
       end
