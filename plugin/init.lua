@@ -12,7 +12,6 @@ local last_save_time = 0
 local defaults = {
   save_dir = wezterm.home_dir .. '/.local/share/wezterm/sessions',
   auto_save_interval = 15 * 60, -- seconds (0 to disable)
-  show_selector_on_attach = true,
   keys = {
     save     = { key = 's', mods = 'LEADER|CTRL' },
     restore  = { key = 'r', mods = 'LEADER|CTRL' },
@@ -348,9 +347,6 @@ function M.apply_to_config(config, opts)
     end)
   end
 
-  -- TODO: show_selector_on_attach disabled for debugging
-  -- if opts.show_selector_on_attach then
-  -- end
 end
 
 return M
