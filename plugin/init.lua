@@ -348,20 +348,9 @@ function M.apply_to_config(config, opts)
     end)
   end
 
-  -- Show workspace selector on first update-status event
-  if opts.show_selector_on_attach then
-    local selector_shown = false
-    wezterm.on('update-status', function(window, pane)
-      wezterm.log_info('session-manager: update-status selector handler called, shown=' .. tostring(selector_shown))
-      if selector_shown then return end
-      selector_shown = true
-      wezterm.log_info('session-manager: attempting to show selector')
-      local ok, err = pcall(function()
-        M.show_workspace_selector(window, pane)
-      end)
-      wezterm.log_info('session-manager: pcall result ok=' .. tostring(ok) .. ' err=' .. tostring(err))
-    end)
-  end
+  -- TODO: show_selector_on_attach disabled for debugging
+  -- if opts.show_selector_on_attach then
+  -- end
 end
 
 return M
