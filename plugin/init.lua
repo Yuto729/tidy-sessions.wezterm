@@ -7,6 +7,7 @@ local M = {}
 local session_dir = nil
 local auto_save_interval = 15 * 60
 local last_save_time = 0
+local restoring = false
 
 --- Default options
 local defaults = {
@@ -131,6 +132,7 @@ end
 
 --- Restore the current workspace state from a JSON file
 function M.restore_state(window)
+  restoring = true
   local workspace_name = window:active_workspace()
   local file_path = session_file_path(workspace_name)
 
@@ -202,6 +204,10 @@ function M.restore_state(window)
   end
 
   window:toast_notification('Session Manager', 'Restored: ' .. workspace_name, nil, 3000)
+  -- Re-enable auto-save after a delay to let tabs fully initialize
+  wezterm.time.call_after(10, function()
+    restoring = false
+  end)
 end
 
 --- Show an InputSelector with active mux workspaces, saved workspaces, and a create option
@@ -278,6 +284,7 @@ end
 --- Auto-save (called from update-status event, throttled by interval)
 local function auto_save(window)
   if auto_save_interval <= 0 then return end
+  if restoring then return end
 
   local now = os.time()
   if now - last_save_time >= auto_save_interval then
