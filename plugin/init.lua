@@ -8,6 +8,7 @@ local session_dir = nil
 local auto_save_interval = 15 * 60
 local last_save_time = os.time()
 local restoring = false
+local process_restore_commands = {}
 
 --- Default options
 local defaults = {
@@ -17,6 +18,9 @@ local defaults = {
     save     = { key = 's', mods = 'LEADER|CTRL' },
     restore  = { key = 'r', mods = 'LEADER|CTRL' },
     selector = { key = 'w', mods = 'LEADER|CTRL' },
+  },
+  process_restore_commands = {
+    nvim = { cmd = '{tty} .', match = '/bin/nvim' },
   },
 }
 
@@ -179,6 +183,7 @@ function M.restore_state(window)
 
     -- Recreate panes within the tab
     for j, pane_data in ipairs(tab_data.panes) do
+      local current_pane
       if j > 1 then
         local direction = 'Right'
         if pane_data.left == tab_data.panes[j - 1].left then
@@ -186,18 +191,23 @@ function M.restore_state(window)
         end
 
         local cwd = extract_path(pane_data.cwd)
-        new_tab:active_pane():split({
+        current_pane = new_tab:active_pane():split({
           direction = direction,
           cwd = cwd,
         })
+      else
+        current_pane = new_tab:active_pane()
       end
 
-      -- Restart nvim in panes that were running it
-      if pane_data.tty and pane_data.tty:match('/nvim$') then
-        local panes = new_tab:panes()
-        local target_pane = panes[j] or panes[#panes]
-        if target_pane then
-          target_pane:send_text('nvim .\n')
+      -- Restart processes based on restore rules
+      if current_pane and pane_data.tty then
+        for _, rule in pairs(process_restore_commands) do
+          if pane_data.tty:sub(-#rule.match) == rule.match then
+            local cwd = extract_path(pane_data.cwd)
+            local cmd = rule.cmd:gsub('{tty}', pane_data.tty):gsub('{cwd}', cwd)
+            current_pane:send_text(cmd .. '\n')
+            break
+          end
         end
       end
     end
@@ -311,6 +321,7 @@ function M.apply_to_config(config, opts)
   -- Store resolved config
   session_dir = opts.save_dir
   auto_save_interval = opts.auto_save_interval
+  process_restore_commands = opts.process_restore_commands or {}
 
   -- Register keybindings
   if opts.keys then
