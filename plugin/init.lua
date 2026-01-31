@@ -352,16 +352,14 @@ function M.apply_to_config(config, opts)
   if opts.show_selector_on_attach then
     local selector_shown = false
     wezterm.on('update-status', function(window, pane)
+      wezterm.log_info('session-manager: update-status selector handler called, shown=' .. tostring(selector_shown))
       if selector_shown then return end
       selector_shown = true
-      wezterm.time.call_after(0.5, function()
-        local ok = pcall(function()
-          M.show_workspace_selector(window, pane)
-        end)
-        if not ok then
-          wezterm.log_info('session-manager: failed to show selector on attach')
-        end
+      wezterm.log_info('session-manager: attempting to show selector')
+      local ok, err = pcall(function()
+        M.show_workspace_selector(window, pane)
       end)
+      wezterm.log_info('session-manager: pcall result ok=' .. tostring(ok) .. ' err=' .. tostring(err))
     end)
   end
 end
