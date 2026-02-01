@@ -9,6 +9,8 @@ local auto_save_interval = 15 * 60
 local last_save_time = os.time()
 local restoring = false
 local process_restore_commands = {}
+local toast_message = nil
+local toast_expire = 0
 
 --- Default options
 local defaults = {
@@ -49,6 +51,16 @@ local function merge_opts(user_opts)
     end
   end
   return opts
+end
+
+--- Show a temporary message in the right status bar
+local function show_toast(window, message, duration_secs)
+  toast_message = message
+  toast_expire = os.time() + (duration_secs or 3)
+  window:set_right_status(wezterm.format {
+    { Foreground = { Color = '#a6da95' } },
+    { Text = ' ' .. message .. ' ' },
+  })
 end
 
 --- Extract filesystem path from a cwd URI
@@ -128,9 +140,9 @@ function M.save_state(window)
   if file then
     file:write(wezterm.json_encode(data))
     file:close()
-    window:toast_notification('Session Manager', 'Saved: ' .. data.name, nil, 3000)
+    show_toast(window, 'Saved: ' .. data.name)
   else
-    window:toast_notification('Session Manager', 'Failed to save: ' .. data.name, nil, 3000)
+    show_toast(window, 'Failed to save: ' .. data.name)
   end
 end
 
@@ -142,7 +154,7 @@ function M.restore_state(window)
 
   local file = io.open(file_path, 'r')
   if not file then
-    window:toast_notification('Session Manager', 'No saved state for: ' .. workspace_name, nil, 3000)
+    show_toast(window, 'No saved state for: ' .. workspace_name)
     return
   end
 
@@ -151,15 +163,14 @@ function M.restore_state(window)
 
   local workspace_data = wezterm.json_parse(content)
   if not workspace_data or not workspace_data.tabs then
-    window:toast_notification('Session Manager', 'Invalid state file for: ' .. workspace_name, nil, 3000)
+    show_toast(window, 'Invalid state file for: ' .. workspace_name)
     return
   end
 
   -- Only restore when window has a single tab with a single pane
   local tabs = window:mux_window():tabs()
   if #tabs ~= 1 or #tabs[1]:panes() ~= 1 then
-    window:toast_notification('Session Manager',
-      'Restore requires a single tab with a single pane', nil, 3000)
+    show_toast(window, 'Restore requires a single tab with a single pane')
     return
   end
 
@@ -213,7 +224,7 @@ function M.restore_state(window)
     end
   end
 
-  window:toast_notification('Session Manager', 'Restored: ' .. workspace_name, nil, 3000)
+  show_toast(window, 'Restored: ' .. workspace_name)
   -- Re-enable auto-save after a delay to let tabs fully initialize
   wezterm.time.call_after(10, function()
     restoring = false
@@ -358,12 +369,19 @@ function M.apply_to_config(config, opts)
     end
   end
 
-  -- Register auto-save on update-status
-  if opts.auto_save_interval > 0 then
-    wezterm.on('update-status', function(window, pane)
+  -- Register update-status handler for auto-save and toast expiry
+  wezterm.on('update-status', function(window, pane)
+    -- Clear expired toast message
+    if toast_message and os.time() >= toast_expire then
+      toast_message = nil
+      window:set_right_status('')
+    end
+
+    -- Auto-save
+    if opts.auto_save_interval > 0 then
       auto_save(window)
-    end)
-  end
+    end
+  end)
 
 end
 
