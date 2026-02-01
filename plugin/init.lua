@@ -213,7 +213,7 @@ function M.restore_state(window)
       -- Restart processes based on restore rules
       if current_pane and pane_data.tty then
         for _, rule in pairs(process_restore_commands) do
-          if pane_data.tty:sub(-#rule.match) == rule.match then
+          if pane_data.tty:find(rule.match, 1, true) then
             local cwd = extract_path(pane_data.cwd)
             local cmd = rule.cmd:gsub('{tty}', pane_data.tty):gsub('{cwd}', cwd)
             current_pane:send_text(cmd .. '\n')
