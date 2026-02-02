@@ -11,11 +11,13 @@ local restoring = false
 local process_restore_commands = {}
 local toast_message = nil
 local toast_expire = 0
+local max_saved_workspaces = 10
 
 --- Default options
 local defaults = {
   save_dir = wezterm.home_dir .. '/.local/share/wezterm/sessions',
   auto_save_interval = 15 * 60, -- seconds (0 to disable)
+  max_saved_workspaces = 10,
   keys = {
     save     = { key = 's', mods = 'LEADER|CTRL' },
     restore  = { key = 'r', mods = 'LEADER|CTRL' },
@@ -114,6 +116,26 @@ local function session_file_path(workspace_name)
   return session_dir .. '/wezterm_state_' .. workspace_name .. '.json'
 end
 
+--- Check if workspace is registered (has a save file)
+local function is_registered(workspace_name)
+  local file = io.open(session_file_path(workspace_name), 'r')
+  if file then
+    file:close()
+    return true
+  end
+  return false
+end
+
+--- Check if current workspace is empty (1 tab, 1 pane, shell only)
+local function is_empty_workspace(window)
+  local tabs = window:mux_window():tabs()
+  if #tabs ~= 1 then return false end
+  local panes = tabs[1]:panes()
+  if #panes ~= 1 then return false end
+  local tty = panes[1]:get_foreground_process_name()
+  return tty:find('sh$') ~= nil or tty:find('nu$') ~= nil
+end
+
 --- List saved workspace names from JSON files
 local function list_saved_workspaces()
   local workspaces = {}
@@ -130,7 +152,7 @@ local function list_saved_workspaces()
   return workspaces
 end
 
---- Save the current workspace state to a JSON file
+--- Save the current workspace state to a JSON file (also registers it)
 function M.save_state(window)
   ensure_session_dir()
   local data = collect_workspace_data(window)
@@ -155,6 +177,7 @@ function M.restore_state(window)
   local file = io.open(file_path, 'r')
   if not file then
     show_toast(window, 'No saved state for: ' .. workspace_name)
+    restoring = false
     return
   end
 
@@ -164,6 +187,7 @@ function M.restore_state(window)
   local workspace_data = wezterm.json_parse(content)
   if not workspace_data or not workspace_data.tabs then
     show_toast(window, 'Invalid state file for: ' .. workspace_name)
+    restoring = false
     return
   end
 
@@ -171,6 +195,7 @@ function M.restore_state(window)
   local tabs = window:mux_window():tabs()
   if #tabs ~= 1 or #tabs[1]:panes() ~= 1 then
     show_toast(window, 'Restore requires a single tab with a single pane')
+    restoring = false
     return
   end
 
@@ -231,9 +256,69 @@ function M.restore_state(window)
   end)
 end
 
---- Show an InputSelector with active mux workspaces, saved workspaces, and a create option
+--- Show delete selector (repeats until user presses Escape)
+local function show_delete_selector(window, pane, on_done)
+  local saved = list_saved_workspaces()
+  if #saved == 0 then
+    show_toast(window, 'No saved workspaces to delete')
+    if on_done then on_done(window, pane) end
+    return
+  end
+
+  local choices = {}
+  for _, name in ipairs(saved) do
+    table.insert(choices, { id = name, label = name })
+  end
+
+  window:perform_action(
+    act.InputSelector {
+      title = 'Delete saved workspace (Escape to finish)',
+      choices = choices,
+      fuzzy = true,
+      action = wezterm.action_callback(function(win, _, id, label)
+        if not id then
+          -- User pressed Escape
+          if on_done then on_done(win, pane) end
+          return
+        end
+        os.remove(session_file_path(id))
+        show_toast(win, 'Deleted: ' .. id)
+        -- Show again for more deletions
+        show_delete_selector(win, pane, on_done)
+      end),
+    },
+    pane
+  )
+end
+
+--- Prompt for workspace name, create, and save (register)
+local function prompt_create_workspace(window, pane)
+  window:perform_action(act.PromptInputLine {
+    description = 'New workspace name:',
+    action = wezterm.action_callback(function(w, p, line)
+      if line and line ~= '' then
+        -- Capture old workspace state before switching
+        local old_workspace = w:active_workspace()
+        local old_is_empty = is_empty_workspace(w)
+        local old_pane_ref = w:active_pane()
+
+        w:perform_action(act.SwitchToWorkspace { name = line }, p)
+        -- Save immediately to register the workspace
+        wezterm.time.call_after(1, function()
+          M.save_state(w)
+          -- Auto-close old empty unregistered workspace
+          if old_is_empty and not is_registered(old_workspace) then
+            old_pane_ref:send_text('exit\n')
+          end
+        end)
+      end
+    end),
+  }, pane)
+end
+
+--- Show workspace selector with active, saved, create, and delete options
 function M.show_workspace_selector(window, pane)
-  -- Active workspaces from the mux server
+  -- Active workspaces from the mux
   local mux_workspaces = wezterm.mux.get_workspace_names()
 
   -- Saved workspaces from JSON files
@@ -246,9 +331,10 @@ function M.show_workspace_selector(window, pane)
   for _, name in ipairs(mux_workspaces) do
     if not seen[name] then
       seen[name] = true
+      local suffix = is_registered(name) and ' (active)' or ' (active, unsaved)'
       table.insert(choices, {
         id = 'mux:' .. name,
-        label = name .. ' (active)',
+        label = name .. suffix,
       })
     end
   end
@@ -268,6 +354,25 @@ function M.show_workspace_selector(window, pane)
     label = '+ Create new workspace',
   })
 
+  table.insert(choices, {
+    id = 'delete',
+    label = '- Delete saved workspaces',
+  })
+
+  -- Capture old workspace state for potential auto-close
+  local old_workspace = window:active_workspace()
+  local old_is_empty = is_empty_workspace(window)
+  local old_pane_ref = window:active_pane()
+
+  --- Try to close old empty unregistered workspace after switch
+  local function try_close_old()
+    if old_is_empty and not is_registered(old_workspace) then
+      wezterm.time.call_after(0.5, function()
+        old_pane_ref:send_text('exit\n')
+      end)
+    end
+  end
+
   window:perform_action(
     act.InputSelector {
       title = 'Select Workspace',
@@ -277,20 +382,29 @@ function M.show_workspace_selector(window, pane)
         if not id then return end
 
         if id == 'new' then
-          win:perform_action(act.PromptInputLine {
-            description = 'New workspace name:',
-            action = wezterm.action_callback(function(w, p, line)
-              if line and line ~= '' then
-                w:perform_action(act.SwitchToWorkspace { name = line }, p)
+          local saved_count = #list_saved_workspaces()
+          if saved_count >= max_saved_workspaces then
+            show_toast(win, 'Limit reached (' .. max_saved_workspaces .. '). Delete some first.')
+            show_delete_selector(win, pane, function(w, p)
+              if #list_saved_workspaces() < max_saved_workspaces then
+                prompt_create_workspace(w, p)
+              else
+                show_toast(w, 'Still at limit.')
               end
-            end),
-          }, pane)
+            end)
+          else
+            prompt_create_workspace(win, pane)
+          end
+        elseif id == 'delete' then
+          show_delete_selector(win, pane, nil)
         elseif id:match('^mux:') then
           local name = id:gsub('^mux:', '')
           win:perform_action(act.SwitchToWorkspace { name = name }, pane)
+          try_close_old()
         elseif id:match('^saved:') then
           local name = id:gsub('^saved:', '')
           win:perform_action(act.SwitchToWorkspace { name = name }, pane)
+          try_close_old()
           -- Restore after workspace switch
           wezterm.time.call_after(1, function()
             M.restore_state(win)
@@ -302,10 +416,14 @@ function M.show_workspace_selector(window, pane)
   )
 end
 
---- Auto-save (called from update-status event, throttled by interval)
+--- Auto-save (only for registered workspaces)
 local function auto_save(window)
   if auto_save_interval <= 0 then return end
   if restoring then return end
+
+  local workspace_name = window:active_workspace()
+  -- Only auto-save workspaces that have been explicitly saved (registered)
+  if not is_registered(workspace_name) then return end
 
   local now = os.time()
   if now - last_save_time >= auto_save_interval then
@@ -332,6 +450,7 @@ function M.apply_to_config(config, opts)
   -- Store resolved config
   session_dir = opts.save_dir
   auto_save_interval = opts.auto_save_interval
+  max_saved_workspaces = opts.max_saved_workspaces
   process_restore_commands = opts.process_restore_commands or {}
 
   -- Register keybindings
