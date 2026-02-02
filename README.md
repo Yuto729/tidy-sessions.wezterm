@@ -1,17 +1,16 @@
-# session-manager.wezterm
+# tidy-sessions.wezterm
 
 A WezTerm plugin for workspace session management. Save and restore your workspace layouts (tabs, panes, working directories) across restarts.
-
-Designed to work with WezTerm's [mux server](https://wezterm.org/docs/mux.html) for seamless session persistence.
 
 ## Features
 
 - **Save/Restore** workspace state (tabs, panes, cwd, split layout) as JSON
-- **Auto-save** at configurable intervals (default: 15 minutes)
-- **Workspace selector** via InputSelector (fuzzy search) showing active and saved workspaces
-- **Auto-show selector** on GUI attach (when connecting to mux server)
-- **Nvim detection** - automatically restarts nvim in panes where it was running
-- **Fully configurable** keybindings, save directory, and behavior
+- **Auto-save** registered workspaces at configurable intervals (default: 15 minutes)
+- **Workspace selector** with fuzzy search — switch, create, restore, and delete workspaces
+- **Registered workspace tracking** — only explicitly saved workspaces are auto-saved; random/temporary workspaces are ignored
+- **Configurable process restore** — automatically restart processes (e.g., nvim, claude) on restore
+- **Auto-cleanup** — empty unregistered workspaces are closed when switching away
+- **Saved workspace limit** — prevent unbounded growth with a configurable maximum
 
 ## Requirements
 
@@ -23,7 +22,7 @@ Add to your `wezterm.lua`:
 
 ```lua
 local wezterm = require 'wezterm'
-local session_manager = wezterm.plugin.require 'https://github.com/Yuto729/session-manager.wezterm'
+local session_manager = wezterm.plugin.require 'https://github.com/Yuto729/tidy-sessions.wezterm'
 local config = wezterm.config_builder()
 
 session_manager.apply_to_config(config)
@@ -43,14 +42,20 @@ session_manager.apply_to_config(config, {
   -- Auto-save interval in seconds (0 to disable)
   auto_save_interval = 15 * 60,
 
-  -- Show workspace selector when GUI attaches to mux server
-  show_selector_on_attach = true,
+  -- Maximum number of saved workspaces
+  max_saved_workspaces = 10,
 
   -- Keybindings (set to false to disable all default bindings)
   keys = {
     save     = { key = 's', mods = 'LEADER|CTRL' },
     restore  = { key = 'r', mods = 'LEADER|CTRL' },
     selector = { key = 'w', mods = 'LEADER|CTRL' },
+  },
+
+  -- Processes to restart on restore (substring match on process path)
+  process_restore_commands = {
+    nvim   = { cmd = '{tty} .', match = '/bin/nvim' },
+    claude = { cmd = 'claude --resume', match = 'claude/versions/' },
   },
 })
 ```
@@ -81,25 +86,33 @@ table.insert(config.keys, {
 | `Leader` + `Ctrl+r` | Restore current workspace |
 | `Leader` + `Ctrl+w` | Open workspace selector |
 
-## Public API
+## Workspace Selector
 
-These functions are available on the plugin object for custom integrations:
+The selector (`Leader+Ctrl+w`) shows:
 
-| Function | Description |
-|----------|-------------|
-| `save_state(window)` | Save the current workspace state to a JSON file |
-| `restore_state(window)` | Restore workspace state from a JSON file |
-| `show_workspace_selector(window, pane)` | Show the workspace selector UI |
-| `apply_to_config(config, opts)` | Apply plugin config (keybindings, events) |
+- **Active workspaces** — currently open (labeled `(active)` or `(active, unsaved)`)
+- **Saved workspaces** — previously saved but not currently active (labeled `(saved)`)
+- **+ Create new workspace** — prompts for a name, creates and saves immediately
+- **- Delete saved workspaces** — remove saved session files (repeatable, Escape to finish)
+
+When the saved workspace limit is reached, creating a new workspace will prompt you to delete existing ones first.
 
 ## How It Works
+
+### Registered Workspaces
+
+A workspace is "registered" when it has a save file. Only registered workspaces are auto-saved.
+
+- **Workspaces created via the selector** are saved immediately (registered)
+- **Random workspaces** (from New Window or initial startup) are not registered unless manually saved with `Leader+Ctrl+s`
+- **Auto-save** only updates existing save files, never creates new ones
 
 ### Save
 
 Collects the current workspace's tab and pane layout, including:
 - Working directory of each pane
 - Split direction and position
-- Foreground process name (for nvim detection)
+- Foreground process name (for process restore)
 
 Saves as JSON to `~/.local/share/wezterm/sessions/wezterm_state_{workspace_name}.json`.
 
@@ -108,51 +121,30 @@ Saves as JSON to `~/.local/share/wezterm/sessions/wezterm_state_{workspace_name}
 Reads the saved JSON and recreates the tab/pane layout:
 - Spawns tabs with the saved working directories
 - Splits panes in the recorded directions
-- Restarts nvim in panes where it was previously running
+- Restarts configured processes (e.g., nvim, claude)
 
 Restore requires the target workspace to have a single tab with a single pane (fresh workspace).
 
-### Workspace Selector
+### Process Restore
 
-Shows an InputSelector with:
-- **Active workspaces** from the mux server (labeled `(active)`)
-- **Saved workspaces** from JSON files (labeled `(saved)`)
-- **Create new workspace** option
+Configure `process_restore_commands` to automatically restart processes on restore. Each rule has:
+- `match` — substring to find in the process path (e.g., `/bin/nvim`, `claude/versions/`)
+- `cmd` — command to execute (supports `{tty}` and `{cwd}` placeholders)
 
-Selecting a saved workspace will switch to it and automatically restore the layout.
+### Auto-cleanup
 
-## Recommended Setup with Mux Server
+When switching workspaces via the selector, the previous workspace is automatically closed if it is:
+1. **Unregistered** (no save file)
+2. **Empty** (single tab, single pane, shell only)
 
-For the best experience, run WezTerm with a mux server:
+## Public API
 
-1. Start the mux server (e.g., via systemd):
-   ```ini
-   # ~/.config/systemd/user/wezterm-mux-server.service
-   [Unit]
-   Description=WezTerm Mux Server
-   After=graphical-session.target
-
-   [Service]
-   ExecStart=/usr/bin/wezterm-mux-server
-   Restart=on-failure
-   RestartSec=5
-
-   [Install]
-   WantedBy=default.target
-   ```
-
-2. Configure unix domain in `wezterm.lua`:
-   ```lua
-   config.unix_domains = {
-     { name = 'unix' },
-   }
-   ```
-
-3. Connect via `wezterm connect unix` (e.g., set as your desktop entry)
-
-This way:
-- **Normal use**: The mux server keeps sessions alive when you close the GUI
-- **PC restart**: The plugin's JSON backup restores your workspaces
+| Function | Description |
+|----------|-------------|
+| `save_state(window)` | Save the current workspace state to a JSON file |
+| `restore_state(window)` | Restore workspace state from a JSON file |
+| `show_workspace_selector(window, pane)` | Show the workspace selector UI |
+| `apply_to_config(config, opts)` | Apply plugin config (keybindings, auto-save) |
 
 ## License
 
